@@ -39,9 +39,12 @@ the same auth flow but use region-local Cognito endpoints.
 | `ap-southeast-2` | `ap-southeast-2_vNriuUNeQ` | `ap-southeast-2:87d0fe24-16af-4189-b02f-984a7ed14ee0` |
 | `ap-east-1` | `ap-east-1_23Lf1WZer` | `ap-east-1:3e9265aa-f564-4083-8e1e-988e6cfdc446` |
 
+**App Client ID (same across all regions):** `3h1sqv3hishjiofbv8giskjgb0`
+
 Cognito Auth Domain: `mow.auth.<region>.amazoncognito.com`
 S3 user data bucket pattern: `mow-user-data-<region>`
-App Client ID (eu-west-1, partial): `c1e40b87b1c283350144e66e19b192...` (32 hex chars — needs full extraction from capture)
+
+**Token lifetime:** AccessToken expires in 86400s (24h). RefreshToken is a JWE (opaque).
 
 ### Auth Flow
 1. `POST https://cognito-idp.<region>.amazonaws.com/`
@@ -169,9 +172,8 @@ Entities
 ---
 
 ## Open Questions
-- Full Cognito App Client IDs for all regions (partial eu-west-1 extracted: `c1e40b87...`)
-- User Pool IDs for `us-east-2` (not found yet)
-- MQTT topic names and message payloads for mower commands
+- User Pool ID for `us-east-2` (not yet extracted from APK)
+- MQTT topic names and message payloads for mower commands (start/stop/park)
 - Exact JSON schema of `get-device-info` and `get-device-feature` responses
-- Token refresh flow (AccessToken expiry, RefreshToken grant)
+- Token refresh flow (RefreshToken grant — AccessToken expires after 24h)
 - Purpose of unknown API gateways (`frgai1jfwg`, `l3hazobjk0`, `xuw7gtx113`, `t0da44vtxf`)
