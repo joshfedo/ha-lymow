@@ -89,6 +89,8 @@ The path structure is identical across all regions — only the gateway ID diffe
 
 ### API Paths (same across all regions)
 
+**Authorization:** All requests use the Cognito `AccessToken` (JWT) as a bare `Authorization` header (no `Bearer` prefix needed — the API Gateway Cognito authorizer accepts it directly).
+
 **Device List** (`device-list` gateway):
 | Method | Path | Description |
 |--------|------|-------------|
@@ -96,12 +98,64 @@ The path structure is identical across all regions — only the gateway ID diffe
 | GET | `/prod/device-list-query?p=validation` | Session keep-alive (polled frequently) |
 | GET | `/prod/device-list-query?p=devices&identityId=<id>` | Lists all devices for the user |
 
+**Device List response** (confirmed):
+```json
+[{
+  "deviceThingName": "device_<mac>",
+  "deviceType": "Lymow one",
+  "deviceName": "",
+  "deviceBluetooth": "Lymow_<suffix>",
+  "createdAt": "<ISO8601>",
+  "fwMinVersion": "<version>",
+  "deviceState": "online|offline",
+  "deviceLocked": false,
+  "sn": "<serial>",
+  "simId": "<sim>",
+  "geoFence": [{"name":"","latitude":0.0,"longitude":0.0,"radius":150}],
+  "theftDetectionSwitch": true,
+  "findRobotSwitch": true,
+  "mobileNotificationSwitch": 2,
+  "theftLock": false
+}]
+```
+
 **Device Info & Features** (`device-info` gateway):
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/prod/get-device-info?deviceThingName=<thing>` | Full device state (status, battery, error codes, etc.) |
-| GET | `/prod/get-device-feature?deviceThingName=<thing>` | Device feature flags / capabilities |
+| GET | `/prod/get-device-info?deviceThingName=<thing>` | Connectivity info, location, versions |
+| GET | `/prod/get-device-feature?deviceThingName=<thing>` | Feature flags / geofence / settings |
 | PATCH | `/prod/update-device-feature` | Update device feature settings |
+
+**get-device-info response** (confirmed — no battery/mowing state, those are MQTT-only):
+```json
+{
+  "deviceThingName": "device_<mac>",
+  "robotLocation": [<lat>, <lon>],
+  "stolenStatus": false,
+  "sn": "<serial>",
+  "deviceState": "online|offline",
+  "deviceBluetooth": "Lymow_<suffix>",
+  "ipAddress": "<ip>",
+  "simId": "<sim>",
+  "mcuVersion": "<version>",
+  "softwareVersion": "<version>",
+  "macAddress": "<mac>",
+  "cleanSchedules": ""
+}
+```
+
+**get-device-feature response** (confirmed):
+```json
+{
+  "deviceThingName": "device_<mac>",
+  "geoFence": [{"name":"","latitude":0.0,"longitude":0.0,"radius":150}],
+  "theftDetectionSwitch": true,
+  "mobileNotificationSwitch": 2,
+  "theftLock": false,
+  "findRobotSwitch": true,
+  "utcTime": "<ISO8601>"
+}
+```
 
 **Firmware / OTA**:
 | Method | Path | Description |
@@ -162,18 +216,24 @@ MQTT Client
        └─ subscribe to device shadow / status topics
        └─ publish commands (start, stop, park)
 
-Entities
-  └─ lawn_mower (state: mowing / docked / paused / error)
-  └─ sensor: battery level
-  └─ sensor: error code
-  └─ binary_sensor: connected
+Entities (REST-only, until MQTT is added)
+  └─ lawn_mower (state: reflects deviceState online/offline; mowing/docked/paused needs MQTT)
+  └─ sensor: connectivity (deviceState)
+  └─ sensor: firmware version (softwareVersion)
+  └─ sensor: MCU version (mcuVersion)
+  └─ sensor: IP address (ipAddress)
+
+Entities (after MQTT)
+  └─ lawn_mower (state: mowing / docked / paused / error — from MQTT shadow)
+  └─ sensor: battery level — from MQTT only (not in REST responses)
+  └─ sensor: error code — from MQTT only
 ```
 
 ---
 
 ## Open Questions
 - User Pool ID for `us-east-2` (not yet extracted from APK)
-- MQTT topic names and message payloads for mower commands (start/stop/park)
-- Exact JSON schema of `get-device-info` and `get-device-feature` responses
+- MQTT topic names and message payloads for mower commands (start/stop/park) and battery/activity state
 - Token refresh flow (RefreshToken grant — AccessToken expires after 24h)
 - Purpose of unknown API gateways (`frgai1jfwg`, `l3hazobjk0`, `xuw7gtx113`, `t0da44vtxf`)
+- `cleanSchedules` field format (always empty string in captured traffic — likely populated when schedules are configured)

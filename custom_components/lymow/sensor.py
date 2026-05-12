@@ -6,7 +6,6 @@ from typing import Any
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorEntityDescription, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import PERCENTAGE
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -22,17 +21,30 @@ class LymowSensorDescription(SensorEntityDescription):
 
 SENSORS: tuple[LymowSensorDescription, ...] = (
     LymowSensorDescription(
-        key="battery",
-        name="Battery",
-        device_class=SensorDeviceClass.BATTERY,
-        native_unit_of_measurement=PERCENTAGE,
-        state_class=SensorStateClass.MEASUREMENT,
-        value_key="battery",
+        key="connectivity",
+        name="Connectivity",
+        value_key="deviceState",
+        icon="mdi:wifi",
     ),
     LymowSensorDescription(
-        key="error_code",
-        name="Error code",
-        value_key="errorCode",
+        key="firmware",
+        name="Firmware version",
+        value_key="softwareVersion",
+        icon="mdi:tag",
+    ),
+    LymowSensorDescription(
+        key="mcu_version",
+        name="MCU version",
+        value_key="mcuVersion",
+        icon="mdi:chip",
+        entity_registry_enabled_default=False,
+    ),
+    LymowSensorDescription(
+        key="ip_address",
+        name="IP address",
+        value_key="ipAddress",
+        icon="mdi:ip-network",
+        entity_registry_enabled_default=False,
     ),
 )
 
@@ -51,10 +63,11 @@ class LymowSensor(CoordinatorEntity[LymowCoordinator], SensorEntity):
 
     def __init__(self, coordinator: LymowCoordinator, device: dict, description: LymowSensorDescription) -> None:
         super().__init__(coordinator)
-        self._thing_name = device["thingName"]
+        self._thing_name = device["deviceThingName"]
         self.entity_description = description
         self._attr_unique_id = f"{self._thing_name}_{description.key}"
-        self._attr_name = f"{device.get('deviceName', self._thing_name)} {description.name}"
+        device_label = device.get("deviceName") or device.get("sn") or self._thing_name
+        self._attr_name = f"{device_label} {description.name}"
 
     @property
     def native_value(self) -> Any:

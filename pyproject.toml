@@ -1,0 +1,23 @@
+[project]
+name = "ha-lymow"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = [
+    "aiohttp>=3.13",
+    "pycognito>=2024.5.1",
+]
+
+
+[project.scripts]
+lymow-cli = "scripts.cli:main_sync"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.25",
+    "aioresponses>=0.7",
+]

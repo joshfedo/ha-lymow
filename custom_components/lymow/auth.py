@@ -51,16 +51,20 @@ def _hex_hash(h: str) -> str:
     return hashlib.sha256(bytes.fromhex(h)).hexdigest()
 
 
+def _hash_sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
 def _hex_to_long(h: str) -> int:
     return int(h, 16)
 
 
-def _long_to_hex(n: int) -> str:
-    return _pad_hex(n)
-
-
 def _get_random(n_bytes: int) -> int:
     return int.from_bytes(os.urandom(n_bytes), "big")
+
+
+def _long_to_hex(n: int) -> str:
+    return f"{n:x}"
 
 
 class SRPClient:
@@ -71,37 +75,50 @@ class SRPClient:
         self.N = _hex_to_long(N_HEX)
         self.g = _hex_to_long(G_HEX)
         self.k = _hex_to_long(_hex_hash("00" + N_HEX + "0" + G_HEX))
-        self.a = _get_random(128)
+        self.a = _get_random(128) % self.N
         self.A = pow(self.g, self.a, self.N)
+        if self.A % self.N == 0:
+            raise ValueError("SRP A is invalid")
 
     @property
     def srp_a(self) -> str:
         return _long_to_hex(self.A)
 
-    def process_challenge(self, salt_hex: str, srp_b_hex: str, secret_block_b64: str, timestamp: str) -> str:
+    def process_challenge(self, username: str, salt_hex: str, srp_b_hex: str, secret_block_b64: str, timestamp: str) -> str:
         B = _hex_to_long(srp_b_hex)
         if B % self.N == 0:
             raise ValueError("SRP B is invalid")
 
         u = _hex_to_long(_hex_hash(_pad_hex(self.A) + _pad_hex(B)))
-        x = _hex_to_long(_hex_hash(salt_hex + _hex_hash(self.pool_name + self.username + ":" + self.password)))
+        if u == 0:
+            raise ValueError("U cannot be zero")
 
-        s = pow(B - self.k * pow(self.g, x, self.N), self.a + u * x, self.N)
+        username_password_hash = _hash_sha256(
+            (self.pool_name + username + ":" + self.password).encode("utf-8")
+        )
+        x = _hex_to_long(_hex_hash(_pad_hex(_hex_to_long(salt_hex)) + username_password_hash))
 
-        hkdf = self._compute_hkdf(bytes.fromhex(_pad_hex(u)), bytes.fromhex(_pad_hex(s)))
+        g_mod_pow_xn = pow(self.g, x, self.N)
+        s = pow(B - self.k * g_mod_pow_xn, self.a + u * x, self.N)
+
+        hkdf = _compute_hkdf(
+            bytearray.fromhex(_pad_hex(s)),
+            bytearray.fromhex(_pad_hex(u)),
+        )
 
         msg = (
-            self.pool_name.encode()
-            + self.username.encode()
-            + base64.b64decode(secret_block_b64)
-            + timestamp.encode()
+            bytearray(self.pool_name, "utf-8")
+            + bytearray(username, "utf-8")
+            + bytearray(base64.b64decode(secret_block_b64))
+            + bytearray(timestamp, "utf-8")
         )
         return base64.b64encode(hmac.new(hkdf, msg, hashlib.sha256).digest()).decode()
 
-    def _compute_hkdf(self, ikm: bytes, salt: bytes) -> bytes:
-        prk = hmac.new(salt, ikm, hashlib.sha256).digest()
-        info_bits_update = INFO_BITS + b"\x01"
-        return hmac.new(prk, info_bits_update, hashlib.sha256).digest()[:16]
+
+def _compute_hkdf(ikm: bytearray, salt: bytearray) -> bytes:
+    prk = hmac.new(salt, ikm, hashlib.sha256).digest()
+    info_bits_update = INFO_BITS + b"\x01"
+    return hmac.new(prk, info_bits_update, hashlib.sha256).digest()[:16]
 
 
 class LymowAuth:
@@ -119,12 +136,14 @@ class LymowAuth:
             cfg = REGION_CONFIG[region]
             pool_id = cfg.get("user_pool_id")
             if pool_id is None:
+                print(f"  [{region}] skipped — user pool ID not known")
                 continue
             try:
                 result = await self._srp_login(username, password, region, pool_id)
                 result["region"] = region
                 return result
-            except Exception:
+            except Exception as exc:
+                print(f"  [{region}] failed: {exc}")
                 continue
         raise ValueError("Login failed for all regions")
 
@@ -146,13 +165,18 @@ class LymowAuth:
         }
 
         async with self._session.post(url, json=payload, headers=headers) as resp:
-            resp.raise_for_status()
-            data = await resp.json()
+            if not resp.ok:
+                body = await resp.text()
+                raise ValueError(f"HTTP {resp.status}: {body}")
+            data = await resp.json(content_type=None)
 
         params = data["ChallengeParameters"]
-        timestamp = datetime.now(UTC).strftime("%a %b %-d %H:%M:%S UTC %Y")
+        now = datetime.now(UTC)
+        # Cognito requires day without leading zero: "Mon Jan 1 00:00:00 UTC 2024"
+        timestamp = f"{now.strftime('%a %b')} {now.day} {now.strftime('%H:%M:%S UTC %Y')}"
 
         signature = srp.process_challenge(
+            params["USER_ID_FOR_SRP"],
             params["SALT"],
             params["SRP_B"],
             params["SECRET_BLOCK"],
@@ -172,8 +196,10 @@ class LymowAuth:
         }
 
         async with self._session.post(url, json=payload, headers=headers) as resp:
-            resp.raise_for_status()
-            data = await resp.json()
+            if not resp.ok:
+                body = await resp.text()
+                raise ValueError(f"HTTP {resp.status}: {body}")
+            data = await resp.json(content_type=None)
 
         return data["AuthenticationResult"]
 
@@ -195,7 +221,7 @@ class LymowAuth:
             "Logins": {login_key: id_token},
         }, headers=headers) as resp:
             resp.raise_for_status()
-            get_id = await resp.json()
+            get_id = await resp.json(content_type=None)
 
         identity_id = get_id["IdentityId"]
 
@@ -205,7 +231,7 @@ class LymowAuth:
             "Logins": {login_key: id_token},
         }, headers=headers) as resp:
             resp.raise_for_status()
-            creds = await resp.json()
+            creds = await resp.json(content_type=None)
 
         return {
             "identity_id": identity_id,

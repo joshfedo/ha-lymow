@@ -1,10 +1,12 @@
+from __future__ import annotations
+
 DOMAIN = "lymow"
 
 # Cognito — App Client ID is shared across all regions
 COGNITO_CLIENT_ID = "3h1sqv3hishjiofbv8giskjgb0"
 
 # Per-region AWS config. Key = Cognito identity pool region prefix.
-REGION_CONFIG = {
+REGION_CONFIG: dict[str, dict[str, str | None]] = {
     "eu-west-1": {
         "user_pool_id": "eu-west-1_6qNPbnrrd",
         "identity_pool_id": "eu-west-1:c905a69c-0153-401a-a879-0c50b892015b",

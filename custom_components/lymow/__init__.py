@@ -25,7 +25,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     client = LymowApiClient(
         session=session,
-        id_token=tokens["IdToken"],
+        access_token=tokens["AccessToken"],
         region=region,
         identity_id=creds["identity_id"],
     )

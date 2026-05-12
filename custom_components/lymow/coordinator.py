@@ -29,7 +29,7 @@ class LymowCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         try:
             result = {}
             for device in self.devices:
-                thing_name = device["thingName"]
+                thing_name = device["deviceThingName"]
                 result[thing_name] = await self._client.get_device_info(thing_name)
             return result
         except Exception as err:
