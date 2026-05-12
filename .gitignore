@@ -1,9 +1,11 @@
-# Secrets and captured traffic
+# Secrets and captured traffic — never commit these
 *.pcap
 *.pcapng
 *.har
+*.txt
 secrets.yaml
 .env
+capture-*.txt
 
 # Python
 __pycache__/
