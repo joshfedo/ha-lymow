@@ -1,8 +1,8 @@
 """CLI to test Lymow auth and API responses.
 
-Credentials are read from environment variables LYMOW_USER / LYMOW_PASS.
-Create a .env file (see .env.example) in the scripts/ directory or repo root
-and it will be loaded automatically — no need to export variables each time.
+Credentials are read from LYMOW_USER / LYMOW_PASS environment variables.
+Create scripts/.env (see scripts/.env.example) and they will be loaded
+automatically — no need to export variables each time.
 
 Usage:
     uv run python scripts/cli.py
@@ -15,9 +15,15 @@ import json
 import os
 import sys
 
+import aiohttp
+
 
 def _load_dotenv() -> None:
-    """Load key=value pairs from .env into os.environ (does not override existing vars)."""
+    """Load key=value pairs from scripts/.env (or ../.env) into os.environ.
+
+    Does not override variables that are already set. Exits with an error
+    message if the file exists but cannot be read.
+    """
     candidates = [
         os.path.join(os.path.dirname(__file__), ".env"),
         os.path.join(os.path.dirname(__file__), "..", ".env"),
@@ -25,16 +31,20 @@ def _load_dotenv() -> None:
     for path in candidates:
         if not os.path.isfile(path):
             continue
-        with open(path) as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                key, _, value = line.partition("=")
-                key = key.strip()
-                value = value.strip().strip('"').strip("'")
-                if key and key not in os.environ:
-                    os.environ[key] = value
+        try:
+            with open(path) as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    key, _, value = line.partition("=")
+                    key = key.strip()
+                    value = value.strip().strip('"').strip("'")
+                    if key and key not in os.environ:
+                        os.environ[key] = value
+        except OSError as exc:
+            print(f"Error: could not read {path}: {exc}", file=sys.stderr)
+            sys.exit(1)
         break
 
 
@@ -55,8 +65,6 @@ _load("lymow.const", os.path.join(_base, "const.py"))
 _load("lymow.auth", os.path.join(_base, "auth.py"))
 _load("lymow.api", os.path.join(_base, "api.py"))
 
-import aiohttp  # noqa: E402
-
 from lymow.auth import LymowAuth  # noqa: E402
 from lymow.api import LymowApiClient  # noqa: E402
 
@@ -66,7 +74,11 @@ async def main() -> None:
     password = os.environ.get("LYMOW_PASS")
 
     if not username or not password:
-        print("Set LYMOW_USER and LYMOW_PASS in a .env file (see scripts/.env.example) or as env vars")
+        print(
+            "Error: LYMOW_USER and LYMOW_PASS must be set.\n"
+            "Copy scripts/.env.example to scripts/.env and fill in your credentials.",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     async with aiohttp.ClientSession() as session:
