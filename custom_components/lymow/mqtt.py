@@ -12,13 +12,14 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import json
 import logging
 import ssl
 import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import quote, urlencode
+from urllib.parse import quote
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -38,8 +39,8 @@ def _hmac_sha256(key: bytes, data: str) -> bytes:
 
 
 def _signing_key(secret_key: str, date_str: str, region: str, service: str) -> bytes:
-    k_date    = _hmac_sha256(("AWS4" + secret_key).encode(), date_str)
-    k_region  = _hmac_sha256(k_date, region)
+    k_date = _hmac_sha256(("AWS4" + secret_key).encode(), date_str)
+    k_region = _hmac_sha256(k_date, region)
     k_service = _hmac_sha256(k_region, service)
     return _hmac_sha256(k_service, "aws4_request")
 
@@ -57,38 +58,41 @@ def build_presigned_ws_path(
     of the app connecting to the AWS IoT endpoint.
     """
     now = datetime.now(UTC)
-    amz_date  = now.strftime("%Y%m%dT%H%M%SZ")
-    date_str  = now.strftime("%Y%m%d")
-    service   = "iotdevicegateway"
-    method    = "GET"
-    uri       = "/mqtt"
+    amz_date = now.strftime("%Y%m%dT%H%M%SZ")
+    date_str = now.strftime("%Y%m%d")
+    service = "iotdevicegateway"
+    method = "GET"
+    uri = "/mqtt"
 
     credential_scope = f"{date_str}/{region}/{service}/aws4_request"
-    credential       = f"{access_key}/{credential_scope}"
+    credential = f"{access_key}/{credential_scope}"
 
     signed_headers = "host"
     canonical_qs_parts: dict[str, str] = {
-        "X-Amz-Algorithm":     "AWS4-HMAC-SHA256",
-        "X-Amz-Credential":    credential,
-        "X-Amz-Date":          amz_date,
+        "X-Amz-Algorithm": "AWS4-HMAC-SHA256",
+        "X-Amz-Credential": credential,
+        "X-Amz-Date": amz_date,
+        "X-Amz-Expires": "86400",
         "X-Amz-SignedHeaders": signed_headers,
     }
     if session_token:
         canonical_qs_parts["X-Amz-Security-Token"] = session_token
 
-    # Sort keys for canonical query string
     canonical_qs = "&".join(
         f"{quote(k, safe='')}={quote(v, safe='')}"
         for k, v in sorted(canonical_qs_parts.items())
     )
 
-    canonical_headers = f"host:{host}\n"
-    payload_hash      = hashlib.sha256(b"").hexdigest()
-
-    canonical_request = "\n".join([
-        method, uri, canonical_qs,
-        canonical_headers, signed_headers, payload_hash,
-    ])
+    # SigV4 canonical request: headers block must end with \n, then signed_headers, then payload hash
+    canonical_request = (
+        f"{method}\n"
+        f"{uri}\n"
+        f"{canonical_qs}\n"
+        f"host:{host}\n"
+        f"\n"
+        f"{signed_headers}\n"
+        f"{hashlib.sha256(b'').hexdigest()}"
+    )
 
     string_to_sign = "\n".join([
         "AWS4-HMAC-SHA256", amz_date, credential_scope,
@@ -120,15 +124,15 @@ class LymowMqttClient:
         on_state: StateCallback,
         on_online: OnlineCallback,
     ) -> None:
-        self._host      = host
-        self._region    = region
-        self._on_state  = on_state
+        self._host = host
+        self._region = region
+        self._on_state = on_state
         self._on_online = on_online
 
-        self._client:     mqtt.Client | None = None
-        self._loop:       asyncio.AbstractEventLoop | None = None
-        self._things:     list[str] = []
-        self._connected   = asyncio.Event()
+        self._client: mqtt.Client | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._things: list[str] = []
+        self._connected = asyncio.Event()
 
     # ------------------------------------------------------------------
     # Public API
@@ -146,7 +150,7 @@ class LymowMqttClient:
             raise RuntimeError("paho-mqtt is not installed")
 
         self._things = things
-        self._loop   = asyncio.get_running_loop()
+        self._loop = asyncio.get_running_loop()
         self._connected.clear()
 
         ws_path = build_presigned_ws_path(
@@ -163,9 +167,9 @@ class LymowMqttClient:
         client.tls_set_context(ssl_ctx)
         client.ws_set_options(path=ws_path, headers={"Host": self._host})
 
-        client.on_connect    = self._on_connect
+        client.on_connect = self._on_connect
         client.on_disconnect = self._on_disconnect
-        client.on_message    = self._on_message
+        client.on_message = self._on_message
 
         self._client = client
 
@@ -175,7 +179,9 @@ class LymowMqttClient:
         try:
             await asyncio.wait_for(self._connected.wait(), timeout=15)
         except asyncio.TimeoutError:
-            _LOGGER.warning("MQTT connection timed out")
+            client.loop_stop()
+            self._client = None
+            raise RuntimeError(f"MQTT connection to {self._host} timed out")
 
     async def reconnect(
         self,
@@ -199,7 +205,7 @@ class LymowMqttClient:
         if not self._client:
             _LOGGER.warning("MQTT not connected — command dropped")
             return
-        topic   = f"/device/{thing_name}/pbinput"
+        topic = f"/device/{thing_name}/pbinput"
         payload = wrap_envelope(pb_bytes)
         self._client.publish(topic, payload, qos=1)
 
@@ -224,10 +230,9 @@ class LymowMqttClient:
             self._loop.call_soon_threadsafe(self._connected.clear)
 
     def _on_message(self, _client: mqtt.Client, _userdata: Any, msg: mqtt.MQTTMessage) -> None:
-        topic   = msg.topic
+        topic = msg.topic
         payload = msg.payload
 
-        # Determine which thing this message belongs to
         thing_name: str | None = None
         for thing in self._things:
             if f"/device/{thing}/" in topic:
@@ -247,14 +252,13 @@ class LymowMqttClient:
     def _handle_pboutput(self, thing_name: str, payload: bytes) -> None:
         from .protocol import decode_pboutput, unwrap_envelope
         pb_bytes = unwrap_envelope(payload)
-        state    = decode_pboutput(pb_bytes)
+        state = decode_pboutput(pb_bytes)
         if self._loop:
             self._loop.call_soon_threadsafe(self._on_state, thing_name, state)
 
     def _handle_notify(self, thing_name: str, payload: bytes) -> None:
-        import json
         try:
-            data      = json.loads(payload)
+            data = json.loads(payload)
             is_online = str(data.get("robotState", "")).lower() == "online"
         except Exception:
             return

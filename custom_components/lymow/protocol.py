@@ -49,6 +49,16 @@ def _decode_varint(data: bytes, pos: int) -> tuple[int, int]:
     return result, pos
 
 
+def _decode_packed_int32s(data: bytes) -> list[int]:
+    """Decode a packed repeated int32 field (raw varint stream, no tags)."""
+    pos = 0
+    values: list[int] = []
+    while pos < len(data):
+        v, pos = _decode_varint(data, pos)
+        values.append(_signed32(v))
+    return values
+
+
 # ---------------------------------------------------------------------------
 # Field encoding helpers
 # ---------------------------------------------------------------------------
@@ -134,7 +144,8 @@ def _all(fields: list[tuple[int, int, Any]], field_no: int) -> list[Any]:
 
 
 def _signed32(v: int) -> int:
-    """Interpret a varint as a signed int32."""
+    """Interpret a varint as a signed int32, handling negative 64-bit encodings."""
+    v &= 0xFFFFFFFF
     if v >= 0x80000000:
         v -= 0x100000000
     return v
@@ -157,11 +168,10 @@ def decode_pboutput(pb_bytes: bytes) -> dict[str, Any]:
     state: dict[str, Any] = {}
     fields = _decode_fields(pb_bytes)
 
-    # Error / warning codes (packed repeated int32)
+    # Error / warning codes — packed repeated int32 (raw varint stream, no field tags)
     error_raw = _first(fields, 3)
     if isinstance(error_raw, bytes) and error_raw:
-        codes = list(_decode_fields(error_raw))
-        state["errorCodes"] = [_signed32(v) for _, _, v in codes]
+        state["errorCodes"] = _decode_packed_int32s(error_raw)
         state["errorCode"] = state["errorCodes"][0] if state["errorCodes"] else 0
     else:
         state["errorCodes"] = []
@@ -169,8 +179,7 @@ def decode_pboutput(pb_bytes: bytes) -> dict[str, Any]:
 
     warning_raw = _first(fields, 4)
     if isinstance(warning_raw, bytes) and warning_raw:
-        codes = list(_decode_fields(warning_raw))
-        state["warningCodes"] = [_signed32(v) for _, _, v in codes]
+        state["warningCodes"] = _decode_packed_int32s(warning_raw)
     else:
         state["warningCodes"] = []
 
@@ -183,7 +192,7 @@ def decode_pboutput(pb_bytes: bytes) -> dict[str, Any]:
         battery = _first(ri, 2)
         if battery is not None:
             state["battery"] = _signed32(battery)
-        state["isCharging"]   = bool(_first(ri, 8, 0))
+        state["isCharging"] = bool(_first(ri, 8, 0))
         state["isRecharging"] = bool(_first(ri, 7, 0))
         wifi_sig = _first(ri, 3)
         if wifi_sig is not None:

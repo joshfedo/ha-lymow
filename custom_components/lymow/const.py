@@ -8,15 +8,6 @@ CONF_PASSWORD = "password"
 # How often to poll REST device state (MQTT keeps live state between polls)
 POLLING_INTERVAL = 30  # seconds
 
-# Cognito App Client ID — eu-west-1 only; other regions have their own
-# (determined from traffic capture of InitiateAuth requests per region)
-_CLIENT_IDS: dict[str, str] = {
-    "eu-west-1":      "3h1sqv3hishjiofbv8giskjgb0",
-    "ap-southeast-2": "4q8v7fmkdj2nplwxt9hrcb5yg3",  # extracted from APK bundle
-    "ap-east-1":      "6ks3mtpw1nqxhfv4cb7gy9jre2",  # extracted from APK bundle
-    "us-east-2":      "7pn4wvtx2rqkmfb9hd5gc8yje1",  # extracted from APK bundle
-}
-
 # Per-region AWS configuration — all values extracted from traffic capture and APK analysis
 REGION_CONFIG: dict[str, dict[str, str | None]] = {
     "eu-west-1": {
