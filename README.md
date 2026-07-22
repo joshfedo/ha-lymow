@@ -32,7 +32,19 @@ Or manually:
 
 1. Go to **Settings → Devices & Services → Add Integration**.
 2. Search for *Lymow*.
-3. Enter your Lymow account credentials.
+3. Choose your sign-in method and follow the form:
+   - **Email and password** keeps the existing Cognito SRP sign-in and can auto-detect the account region.
+   - **Google Account** uses Lymow's Cognito Hosted UI. Select the same region as the Lymow account before opening the sign-in link.
+
+### Google Account sign-in
+
+Lymow's Cognito client redirects Google sign-in to the mobile-app address `myapp://callback/`. A desktop browser may report that it cannot open this address. Copy the complete callback address from the browser and paste it into the Home Assistant form. If you copy only the authorization code, also copy the callback's `state` value into the state field.
+
+Submit the callback promptly because the authorization code is short-lived and can be used only once. If it expires, open the Google sign-in link again to start a fresh attempt.
+
+Home Assistant stores the OAuth refresh token in the integration's config entry. Restarts and routine token expiry are handled automatically without a Google password. If Google or Lymow revokes the refresh token, Home Assistant marks the entry as requiring reauthentication; open the Lymow integration in **Settings → Devices & Services** and complete the Google sign-in prompt again. Password entries use the corresponding password reauthentication form.
+
+OAuth callbacks, authorization codes, and access, ID, or refresh tokens are credentials. Never post them in GitHub issues, logs, screenshots, or support requests.
 
 ## Entities
 
