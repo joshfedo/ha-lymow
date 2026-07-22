@@ -4,20 +4,54 @@
       "user": {
         "title": "Connect to Lymow",
         "data": {
-          "username": "Email",
-          "password": "Password",
+          "auth_method": "Sign-in method",
           "region": "AWS Region"
         },
         "data_description": {
-          "region": "Leave on Auto-detect unless you know your account is in a specific region."
+          "region": "Password sign-in can auto-detect the region. Google sign-in requires the account's region."
+        }
+      },
+      "password": {
+        "title": "Sign in with email and password",
+        "data": {
+          "username": "Email",
+          "password": "Password"
+        }
+      },
+      "google": {
+        "title": "Sign in with Google",
+        "description": "[Open Google sign-in]({auth_url}). After signing in, your browser may be unable to open the `myapp://callback` address. Copy that complete address and paste it below. If you paste only the authorization code, also paste the state value from the callback. Submit promptly because authorization codes expire quickly.",
+        "data": {
+          "oauth_result": "Authorization code or callback URL",
+          "oauth_state": "OAuth state"
+        },
+        "data_description": {
+          "oauth_state": "Required only when pasting an authorization code instead of the complete callback URL."
+        }
+      },
+      "reauth_confirm": {
+        "title": "Reauthenticate Lymow",
+        "description": "Enter the current password for {username}.",
+        "data": {
+          "password": "Password"
         }
       }
     },
     "error": {
-      "invalid_auth": "Invalid email or password"
+      "invalid_auth": "Invalid email or password",
+      "cannot_connect": "Could not connect to Lymow authentication services",
+      "region_required": "Select the region for Google sign-in",
+      "oauth_code_missing": "The OAuth callback did not contain an authorization code",
+      "oauth_state_mismatch": "The OAuth state did not match this sign-in attempt",
+      "invalid_oauth_code": "The Google authorization code is invalid or expired",
+      "missing_refresh_token": "Google sign-in did not return a refresh token; start sign-in again"
     },
     "abort": {
-      "already_configured": "Account already configured"
+      "already_configured": "Account already configured",
+      "no_devices": "No Lymow mower devices were found for this account",
+      "reauth_successful": "Reauthentication was successful",
+      "reauth_entry_missing": "The config entry to reauthenticate no longer exists",
+      "region_required": "The existing Google entry does not have a valid region"
     }
   },
   "options": {
@@ -38,6 +72,12 @@
     }
   },
   "selector": {
+    "auth_method": {
+      "options": {
+        "password": "Email and password",
+        "google": "Google Account"
+      }
+    },
     "region": {
       "options": {
         "auto": "Auto-detect",
