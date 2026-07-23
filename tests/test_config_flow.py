@@ -16,10 +16,8 @@ import pytest
 from aiohttp import web
 from lymow.auth import LymowAuthError
 from lymow.config_flow import (
-    GOOGLE_REGION_CHOICES,
     OAUTH_RESULT,
     OAUTH_STATE,
-    STEP_GOOGLE_REGION_SCHEMA,
     STEP_USER_SCHEMA,
     LymowConfigFlow,
     LymowOAuthStartView,
@@ -68,34 +66,24 @@ def _make_flow() -> LymowConfigFlow:
     flow.hass.config_entries.async_update_entry = MagicMock()
     flow.hass.config_entries.async_reload = AsyncMock()
     flow.context = {}
-    flow.flow_id = "flow_1234567890abcdef"
     flow.async_set_unique_id = AsyncMock()
     flow._abort_if_unique_id_configured = MagicMock()
     flow.async_create_entry = MagicMock(side_effect=lambda **kwargs: {"type": "create_entry", **kwargs})
     flow.async_show_form = MagicMock(side_effect=lambda **kwargs: {"type": "form", **kwargs})
     flow.async_abort = MagicMock(side_effect=lambda **kwargs: {"type": "abort", **kwargs})
-    flow.async_external_step = MagicMock(side_effect=lambda **kwargs: {"type": "external", **kwargs})
-    flow.async_external_step_done = MagicMock(side_effect=lambda **kwargs: {"type": "external_done", **kwargs})
     flow.async_update_reload_and_abort = MagicMock(
         side_effect=lambda _entry, **kwargs: {"type": "abort", "reason": kwargs["reason"]}
     )
     return flow
 
 
-async def _select_password(flow: LymowConfigFlow) -> None:
-    result = await flow.async_step_user({CONF_AUTH_METHOD: AUTH_METHOD_PASSWORD})
+async def _select_password(flow: LymowConfigFlow, region: str = REGION_AUTO) -> None:
+    result = await flow.async_step_user({CONF_AUTH_METHOD: AUTH_METHOD_PASSWORD, CONF_REGION: region})
     assert result["step_id"] == "password"
 
 
 async def _select_google(flow: LymowConfigFlow, region: str = "eu-west-1") -> dict[str, Any]:
-    region_result = await flow.async_step_user({CONF_AUTH_METHOD: AUTH_METHOD_GOOGLE})
-    assert region_result["step_id"] == "google_region"
-    external = await flow.async_step_google_region({CONF_REGION: region})
-    assert external["type"] == "external"
-    assert external["step_id"] == "google_authorize"
-    done = await flow.async_step_google_authorize({})
-    assert done == {"type": "external_done", "next_step_id": "google"}
-    result = await flow.async_step_google()
+    result = await flow.async_step_user({CONF_AUTH_METHOD: AUTH_METHOD_GOOGLE, CONF_REGION: region})
     assert result["step_id"] == "google"
     return result
 
@@ -119,13 +107,13 @@ def _callback(flow: LymowConfigFlow, *, state: str | None = None, code: str = "o
     return f"myapp://callback/?code={code}&state={callback_state}"
 
 
-async def test_user_step_shows_auth_method_selection() -> None:
+async def test_user_step_shows_auth_method_and_region_selection() -> None:
     flow = _make_flow()
     result = await flow.async_step_user()
     assert result["type"] == "form"
     assert result["step_id"] == "user"
     assert result["errors"] == {}
-    assert [marker.schema for marker in STEP_USER_SCHEMA.schema] == [CONF_AUTH_METHOD]
+    assert [marker.schema for marker in STEP_USER_SCHEMA.schema] == [CONF_AUTH_METHOD, CONF_REGION]
 
 
 async def test_user_step_routes_to_password() -> None:
@@ -134,26 +122,11 @@ async def test_user_step_routes_to_password() -> None:
     assert flow._auth_method == AUTH_METHOD_PASSWORD
 
 
-async def test_google_region_step_requires_an_explicit_region() -> None:
+async def test_user_step_requires_an_explicit_google_region() -> None:
     flow = _make_flow()
-    result = await flow.async_step_user({CONF_AUTH_METHOD: AUTH_METHOD_GOOGLE})
-    assert result["step_id"] == "google_region"
-    assert [marker.schema for marker in STEP_GOOGLE_REGION_SCHEMA.schema] == [CONF_REGION]
-    assert REGION_AUTO not in GOOGLE_REGION_CHOICES
-    invalid = await flow.async_step_google_region({CONF_REGION: REGION_AUTO})
-    assert invalid["step_id"] == "google_region"
-    assert invalid["errors"] == {CONF_REGION: "region_required"}
-
-
-async def test_google_region_opens_native_external_authorization_step() -> None:
-    flow = _make_flow()
-    await flow.async_step_user({CONF_AUTH_METHOD: AUTH_METHOD_GOOGLE})
-    result = await flow.async_step_google_region({CONF_REGION: "eu-west-1"})
-
-    assert result["type"] == "external"
-    assert result["step_id"] == "google_authorize"
-    query = parse_qs(urlparse(result["url"]).query)
-    assert query["flow_id"] == [flow.flow_id]
+    result = await flow.async_step_user({CONF_AUTH_METHOD: AUTH_METHOD_GOOGLE, CONF_REGION: REGION_AUTO})
+    assert result["step_id"] == "user"
+    assert result["errors"] == {CONF_REGION: "region_required"}
 
 
 def test_custom_integration_translations_ship_google_link_and_field_labels() -> None:
@@ -166,7 +139,9 @@ def test_custom_integration_translations_ship_google_link_and_field_labels() -> 
     assert "[Open Google sign-in]({auth_url})" in google_step["description"]
     assert google_step["data"][OAUTH_RESULT] == "Authorization code or callback URL"
     assert google_step["data"][OAUTH_STATE] == "OAuth state"
-    assert config["step"]["google_region"]["data"][CONF_REGION] == "AWS Region"
+    assert config["step"]["user"]["data"][CONF_REGION] == "AWS Region"
+    assert "google_region" not in config["step"]
+    assert "google_authorize" not in config["step"]
 
 
 async def test_password_auto_region_creates_compatible_entry() -> None:
@@ -198,7 +173,7 @@ async def test_password_auto_region_creates_compatible_entry() -> None:
 
 async def test_password_explicit_region_uses_login_region() -> None:
     flow = _make_flow()
-    await _select_password(flow)
+    await _select_password(flow, "us-east-2")
     tokens = {**_PASSWORD_TOKENS, "region": "us-east-2"}
     auth = MagicMock()
     auth.login_region = AsyncMock(return_value=tokens)
@@ -260,7 +235,6 @@ async def test_google_start_link_uses_internal_url_and_flow_values() -> None:
         "region": ["ap-east-1"],
         "state": [flow._oauth_state],
         "code_challenge": [flow._pkce_challenge],
-        "flow_id": [flow.flow_id],
     }
 
 
@@ -498,8 +472,8 @@ async def test_google_reauth_replaces_token_without_creating_duplicate() -> None
     ):
         result = await flow.async_step_google({OAUTH_RESULT: _callback(flow)})
 
-    assert first["type"] == "external"
-    assert first["step_id"] == "google_authorize"
+    assert first["type"] == "form"
+    assert first["step_id"] == "google"
     assert result == {"type": "abort", "reason": "reauth_successful"}
     updated = flow.async_update_reload_and_abort.call_args.kwargs["data_updates"]
     assert updated["refresh_token"] == "google-refresh"
@@ -533,18 +507,14 @@ async def test_internal_google_guards_raise_when_state_missing() -> None:
         await flow._async_update_reauth_entry({})
 
 
-async def test_oauth_start_view_shows_instructions_and_advances_flow() -> None:
+async def test_oauth_start_view_shows_reference_callback_recovery_flow() -> None:
     request = MagicMock()
     request.query = {
         "region": "eu-west-1",
         "state": "s" * 43,
         "code_challenge": "c" * 43,
-        "flow_id": "flow_1234567890abcdef",
     }
     hass = MagicMock()
-    hass.config_entries.flow.async_configure = AsyncMock(
-        return_value={"type": "external_done", "next_step_id": "google"}
-    )
     request.app = {"hass": hass}
     auth = MagicMock()
     auth.get_oauth_authorize_url.return_value = "https://eu-auth.lymow.com/oauth2/authorize?safe=true"
@@ -556,10 +526,12 @@ async def test_oauth_start_view_shows_instructions_and_advances_flow() -> None:
 
     assert response.status == 200
     assert "Connect Lymow with Google" in response.text
-    assert "Open Google sign-in" in response.text
-    assert 'href="https://eu-auth.lymow.com/oauth2/authorize?safe=true"' in response.text
-    assert "Copy the complete" in response.text
-    hass.config_entries.flow.async_configure.assert_awaited_once_with("flow_1234567890abcdef", {})
+    assert "Sign in with Google" in response.text
+    assert "Get authorization code" in response.text
+    assert "Preserve log" in response.text
+    assert "DevTools" in response.text
+    assert response.text.count('href="https://eu-auth.lymow.com/oauth2/authorize?safe=true"') == 2
+    hass.config_entries.flow.async_configure.assert_not_called()
     auth.get_oauth_authorize_url.assert_called_once_with(
         region="eu-west-1",
         redirect_uri="myapp://callback/",
@@ -574,12 +546,6 @@ async def test_oauth_start_view_shows_instructions_and_advances_flow() -> None:
         {"region": "invalid", "state": "s" * 43, "code_challenge": "c" * 43},
         {"region": "eu-west-1", "state": "short", "code_challenge": "c" * 43},
         {"region": "eu-west-1", "state": "s" * 43, "code_challenge": "bad value"},
-        {
-            "region": "eu-west-1",
-            "state": "s" * 43,
-            "code_challenge": "c" * 43,
-            "flow_id": "bad value",
-        },
     ],
 )
 async def test_oauth_start_view_rejects_untrusted_query_values(query: dict[str, str]) -> None:

@@ -38,9 +38,16 @@ Or manually:
 
 ### Google Account sign-in
 
-Lymow's Cognito client redirects Google sign-in to the mobile-app address `myapp://callback/`. A desktop browser may report that it cannot open this address. Copy the complete callback address from the browser and paste it into the Home Assistant form. If you copy only the authorization code, also copy the callback's `state` value into the state field.
+Open the Google sign-in link shown by Home Assistant. On the helper page:
 
-Submit the callback promptly because the authorization code is short-lived and can be used only once. If it expires, open the Google sign-in link again to start a fresh attempt.
+1. Use **Sign in with Google** to finish signing in in a new tab.
+2. Back on the helper page, open the browser's DevTools, select **Network**, and enable **Preserve log**.
+3. Select **Get authorization code**.
+4. Find the network request containing `callback`, copy its complete URL, and paste it into the Home Assistant form.
+
+Lymow's Cognito client redirects to the mobile-app address `myapp://callback/`, which a desktop browser normally cannot open. If you paste only the authorization code instead of the complete callback URL, also paste the callback's `state` value into the state field.
+
+Submit the callback promptly because the authorization code is short-lived and can be used only once. If it expires, reopen the Google sign-in helper to start a fresh attempt.
 
 Home Assistant stores the OAuth refresh token in the integration's config entry. Restarts and routine token expiry are handled automatically without a Google password. If Google or Lymow revokes the refresh token, Home Assistant marks the entry as requiring reauthentication; open the Lymow integration in **Settings → Devices & Services** and complete the Google sign-in prompt again. Password entries use the corresponding password reauthentication form.
 
