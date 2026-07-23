@@ -44,6 +44,18 @@ OAUTH_REDIRECT_URI = "myapp://callback/"
 OAUTH_RESULT = "oauth_result"
 OAUTH_STATE = "oauth_state"
 _OAUTH_VIEW_REGISTERED_KEY = f"{DOMAIN}_oauth_view_registered"
+GOOGLE_REGION_CHOICES = [region for region in REGION_CHOICES if region != REGION_AUTO]
+
+
+def _region_selector(options: list[str]) -> SelectSelector:
+    return SelectSelector(
+        SelectSelectorConfig(
+            options=options,
+            mode=SelectSelectorMode.DROPDOWN,
+            translation_key="region",
+        )
+    )
+
 
 STEP_USER_SCHEMA = vol.Schema(
     {
@@ -54,13 +66,6 @@ STEP_USER_SCHEMA = vol.Schema(
                 translation_key="auth_method",
             )
         ),
-        vol.Optional(CONF_REGION, default=REGION_AUTO): SelectSelector(
-            SelectSelectorConfig(
-                options=REGION_CHOICES,
-                mode=SelectSelectorMode.DROPDOWN,
-                translation_key="region",
-            )
-        ),
     }
 )
 
@@ -68,6 +73,13 @@ STEP_PASSWORD_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_USERNAME): str,
         vol.Required(CONF_PASSWORD): str,
+        vol.Optional(CONF_REGION, default=REGION_AUTO): _region_selector(REGION_CHOICES),
+    }
+)
+
+STEP_GOOGLE_REGION_SCHEMA = vol.Schema(
+    {
+        vol.Required(CONF_REGION): _region_selector(GOOGLE_REGION_CHOICES),
     }
 )
 
@@ -91,24 +103,31 @@ class LymowConfigFlow(ConfigFlow, domain=DOMAIN):
         self._reauth_entry: ConfigEntry | None = None
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        errors: dict[str, str] = {}
         if user_input is not None:
             self._auth_method = user_input[CONF_AUTH_METHOD]
-            self._region = user_input.get(CONF_REGION, REGION_AUTO)
             if self._auth_method == AUTH_METHOD_GOOGLE:
-                if self._region == REGION_AUTO:
-                    errors[CONF_REGION] = "region_required"
-                else:
-                    self._prepare_oauth()
-                    return await self.async_step_google()
-            else:
-                return await self.async_step_password()
+                return await self.async_step_google_region()
+            return await self.async_step_password()
 
-        return self.async_show_form(step_id="user", data_schema=STEP_USER_SCHEMA, errors=errors)
+        return self.async_show_form(step_id="user", data_schema=STEP_USER_SCHEMA, errors={})
+
+    async def async_step_google_region(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        if user_input is not None:
+            self._region = user_input[CONF_REGION]
+            if self._region in GOOGLE_REGION_CHOICES:
+                self._prepare_oauth()
+                return await self.async_step_google()
+
+        return self.async_show_form(
+            step_id="google_region",
+            data_schema=STEP_GOOGLE_REGION_SCHEMA,
+            errors={} if user_input is None else {CONF_REGION: "region_required"},
+        )
 
     async def async_step_password(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         errors: dict[str, str] = {}
         if user_input is not None:
+            self._region = user_input.get(CONF_REGION, REGION_AUTO)
             session = async_get_clientsession(self.hass)
             auth = LymowAuth(session)
             try:
