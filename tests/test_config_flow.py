@@ -6,6 +6,7 @@ import base64
 import hashlib
 import json
 import sys
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 from urllib.parse import parse_qs, urlparse
@@ -15,8 +16,11 @@ import pytest
 from aiohttp import web
 from lymow.auth import LymowAuthError
 from lymow.config_flow import (
+    GOOGLE_REGION_CHOICES,
     OAUTH_RESULT,
     OAUTH_STATE,
+    STEP_GOOGLE_REGION_SCHEMA,
+    STEP_USER_SCHEMA,
     LymowConfigFlow,
     LymowOAuthStartView,
     LymowOptionsFlow,
@@ -75,13 +79,15 @@ def _make_flow() -> LymowConfigFlow:
     return flow
 
 
-async def _select_password(flow: LymowConfigFlow, region: str = REGION_AUTO) -> None:
-    result = await flow.async_step_user({CONF_AUTH_METHOD: AUTH_METHOD_PASSWORD, CONF_REGION: region})
+async def _select_password(flow: LymowConfigFlow) -> None:
+    result = await flow.async_step_user({CONF_AUTH_METHOD: AUTH_METHOD_PASSWORD})
     assert result["step_id"] == "password"
 
 
 async def _select_google(flow: LymowConfigFlow, region: str = "eu-west-1") -> dict[str, Any]:
-    result = await flow.async_step_user({CONF_AUTH_METHOD: AUTH_METHOD_GOOGLE, CONF_REGION: region})
+    region_result = await flow.async_step_user({CONF_AUTH_METHOD: AUTH_METHOD_GOOGLE})
+    assert region_result["step_id"] == "google_region"
+    result = await flow.async_step_google_region({CONF_REGION: region})
     assert result["step_id"] == "google"
     return result
 
@@ -111,6 +117,7 @@ async def test_user_step_shows_auth_method_selection() -> None:
     assert result["type"] == "form"
     assert result["step_id"] == "user"
     assert result["errors"] == {}
+    assert [marker.schema for marker in STEP_USER_SCHEMA.schema] == [CONF_AUTH_METHOD]
 
 
 async def test_user_step_routes_to_password() -> None:
@@ -119,11 +126,29 @@ async def test_user_step_routes_to_password() -> None:
     assert flow._auth_method == AUTH_METHOD_PASSWORD
 
 
-async def test_user_step_requires_explicit_google_region() -> None:
+async def test_google_region_step_requires_an_explicit_region() -> None:
     flow = _make_flow()
-    result = await flow.async_step_user({CONF_AUTH_METHOD: AUTH_METHOD_GOOGLE, CONF_REGION: REGION_AUTO})
-    assert result["step_id"] == "user"
-    assert result["errors"] == {CONF_REGION: "region_required"}
+    result = await flow.async_step_user({CONF_AUTH_METHOD: AUTH_METHOD_GOOGLE})
+    assert result["step_id"] == "google_region"
+    assert [marker.schema for marker in STEP_GOOGLE_REGION_SCHEMA.schema] == [CONF_REGION]
+    assert REGION_AUTO not in GOOGLE_REGION_CHOICES
+    invalid = await flow.async_step_google_region({CONF_REGION: REGION_AUTO})
+    assert invalid["step_id"] == "google_region"
+    assert invalid["errors"] == {CONF_REGION: "region_required"}
+
+
+def test_config_flow_translations_ship_google_link_and_field_labels() -> None:
+    integration_dir = Path(__file__).parents[1] / "custom_components" / "lymow"
+    strings_text = (integration_dir / "strings.json").read_text()
+    translation_text = (integration_dir / "translations" / "en.json").read_text()
+    assert strings_text == translation_text
+
+    config = json.loads(strings_text)["config"]
+    google_step = config["step"]["google"]
+    assert "[Open Google sign-in]({auth_url})" in google_step["description"]
+    assert google_step["data"][OAUTH_RESULT] == "Authorization code or callback URL"
+    assert google_step["data"][OAUTH_STATE] == "OAuth state"
+    assert config["step"]["google_region"]["data"][CONF_REGION] == "AWS Region"
 
 
 async def test_password_auto_region_creates_compatible_entry() -> None:
@@ -136,7 +161,9 @@ async def test_password_auto_region_creates_compatible_entry() -> None:
         patch.object(_config_flow_mod, "async_get_clientsession", return_value=MagicMock()),
         patch.object(_config_flow_mod, "LymowAuth", return_value=auth),
     ):
-        result = await flow.async_step_password({CONF_USERNAME: "User@Example.com", CONF_PASSWORD: "password-value"})
+        result = await flow.async_step_password(
+            {CONF_USERNAME: "User@Example.com", CONF_PASSWORD: "password-value", CONF_REGION: REGION_AUTO}
+        )
 
     assert result["type"] == "create_entry"
     assert result["title"] == "User@Example.com"
@@ -153,7 +180,7 @@ async def test_password_auto_region_creates_compatible_entry() -> None:
 
 async def test_password_explicit_region_uses_login_region() -> None:
     flow = _make_flow()
-    await _select_password(flow, "us-east-2")
+    await _select_password(flow)
     tokens = {**_PASSWORD_TOKENS, "region": "us-east-2"}
     auth = MagicMock()
     auth.login_region = AsyncMock(return_value=tokens)
@@ -162,7 +189,9 @@ async def test_password_explicit_region_uses_login_region() -> None:
         patch.object(_config_flow_mod, "async_get_clientsession", return_value=MagicMock()),
         patch.object(_config_flow_mod, "LymowAuth", return_value=auth),
     ):
-        await flow.async_step_password({CONF_USERNAME: "user@example.com", CONF_PASSWORD: "password-value"})
+        await flow.async_step_password(
+            {CONF_USERNAME: "user@example.com", CONF_PASSWORD: "password-value", CONF_REGION: "us-east-2"}
+        )
 
     auth.login_region.assert_awaited_once_with("user@example.com", "password-value", "us-east-2")
 
@@ -177,7 +206,9 @@ async def test_password_failure_keeps_existing_error_behavior() -> None:
         patch.object(_config_flow_mod, "async_get_clientsession", return_value=MagicMock()),
         patch.object(_config_flow_mod, "LymowAuth", return_value=auth),
     ):
-        result = await flow.async_step_password({CONF_USERNAME: "user@example.com", CONF_PASSWORD: "wrong-value"})
+        result = await flow.async_step_password(
+            {CONF_USERNAME: "user@example.com", CONF_PASSWORD: "wrong-value", CONF_REGION: REGION_AUTO}
+        )
 
     assert result["errors"] == {"base": "invalid_auth"}
     flow.async_create_entry.assert_not_called()
