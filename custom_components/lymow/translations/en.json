@@ -4,19 +4,30 @@
       "user": {
         "title": "Connect to Lymow",
         "data": {
-          "auth_method": "Sign-in method",
-          "region": "AWS Region"
-        },
-        "data_description": {
-          "region": "Password sign-in can auto-detect the region. Google sign-in requires the account's region."
+          "auth_method": "Sign-in method"
         }
       },
       "password": {
         "title": "Sign in with email and password",
         "data": {
           "username": "Email",
-          "password": "Password"
+          "password": "Password",
+          "region": "AWS Region"
+        },
+        "data_description": {
+          "region": "Leave on Auto-detect unless you know your account is in a specific region."
         }
+      },
+      "google_region": {
+        "title": "Choose your Lymow account region",
+        "description": "Google sign-in requires the AWS region used by your Lymow account.",
+        "data": {
+          "region": "AWS Region"
+        }
+      },
+      "google_authorize": {
+        "title": "Authorize Lymow with Google",
+        "description": "Open the authorization website and follow its instructions. Home Assistant will then ask for the callback address."
       },
       "google": {
         "title": "Sign in with Google",

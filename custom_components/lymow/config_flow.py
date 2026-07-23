@@ -6,6 +6,7 @@ import base64
 import binascii
 import hashlib
 import hmac
+import html
 import json
 import secrets
 from typing import Any
@@ -44,6 +45,18 @@ OAUTH_REDIRECT_URI = "myapp://callback/"
 OAUTH_RESULT = "oauth_result"
 OAUTH_STATE = "oauth_state"
 _OAUTH_VIEW_REGISTERED_KEY = f"{DOMAIN}_oauth_view_registered"
+GOOGLE_REGION_CHOICES = [region for region in REGION_CHOICES if region != REGION_AUTO]
+
+
+def _region_selector(options: list[str]) -> SelectSelector:
+    return SelectSelector(
+        SelectSelectorConfig(
+            options=options,
+            mode=SelectSelectorMode.DROPDOWN,
+            translation_key="region",
+        )
+    )
+
 
 STEP_USER_SCHEMA = vol.Schema(
     {
@@ -54,13 +67,6 @@ STEP_USER_SCHEMA = vol.Schema(
                 translation_key="auth_method",
             )
         ),
-        vol.Optional(CONF_REGION, default=REGION_AUTO): SelectSelector(
-            SelectSelectorConfig(
-                options=REGION_CHOICES,
-                mode=SelectSelectorMode.DROPDOWN,
-                translation_key="region",
-            )
-        ),
     }
 )
 
@@ -68,6 +74,13 @@ STEP_PASSWORD_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_USERNAME): str,
         vol.Required(CONF_PASSWORD): str,
+        vol.Optional(CONF_REGION, default=REGION_AUTO): _region_selector(REGION_CHOICES),
+    }
+)
+
+STEP_GOOGLE_REGION_SCHEMA = vol.Schema(
+    {
+        vol.Required(CONF_REGION): _region_selector(GOOGLE_REGION_CHOICES),
     }
 )
 
@@ -91,24 +104,42 @@ class LymowConfigFlow(ConfigFlow, domain=DOMAIN):
         self._reauth_entry: ConfigEntry | None = None
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        errors: dict[str, str] = {}
         if user_input is not None:
             self._auth_method = user_input[CONF_AUTH_METHOD]
-            self._region = user_input.get(CONF_REGION, REGION_AUTO)
             if self._auth_method == AUTH_METHOD_GOOGLE:
-                if self._region == REGION_AUTO:
-                    errors[CONF_REGION] = "region_required"
-                else:
-                    self._prepare_oauth()
-                    return await self.async_step_google()
-            else:
-                return await self.async_step_password()
+                return await self.async_step_google_region()
+            return await self.async_step_password()
 
-        return self.async_show_form(step_id="user", data_schema=STEP_USER_SCHEMA, errors=errors)
+        return self.async_show_form(step_id="user", data_schema=STEP_USER_SCHEMA, errors={})
+
+    async def async_step_google_region(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        if user_input is not None:
+            self._region = user_input[CONF_REGION]
+            if self._region in GOOGLE_REGION_CHOICES:
+                self._prepare_oauth()
+                return await self.async_step_google_authorize()
+
+        return self.async_show_form(
+            step_id="google_region",
+            data_schema=STEP_GOOGLE_REGION_SCHEMA,
+            errors={} if user_input is None else {CONF_REGION: "region_required"},
+        )
+
+    async def async_step_google_authorize(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        if user_input is not None:
+            return self.async_external_step_done(next_step_id="google")
+
+        self._prepare_oauth()
+        self._register_oauth_view()
+        return self.async_external_step(
+            step_id="google_authorize",
+            url=self._oauth_start_url(),
+        )
 
     async def async_step_password(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         errors: dict[str, str] = {}
         if user_input is not None:
+            self._region = user_input.get(CONF_REGION, REGION_AUTO)
             session = async_get_clientsession(self.hass)
             auth = LymowAuth(session)
             try:
@@ -176,7 +207,7 @@ class LymowConfigFlow(ConfigFlow, domain=DOMAIN):
             if self._region == REGION_AUTO:
                 return self.async_abort(reason="region_required")
             self._prepare_oauth()
-            return await self.async_step_google()
+            return await self.async_step_google_authorize()
         return await self.async_step_reauth_confirm()
 
     async def async_step_reauth_confirm(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
@@ -321,6 +352,7 @@ class LymowConfigFlow(ConfigFlow, domain=DOMAIN):
                 "region": self._region,
                 "state": self._oauth_state,
                 "code_challenge": self._pkce_challenge,
+                "flow_id": self.flow_id,
             }
         )
         return f"{base_url.rstrip('/')}{LymowOAuthStartView.url}?{query}"
@@ -332,32 +364,74 @@ class LymowConfigFlow(ConfigFlow, domain=DOMAIN):
 
 
 class LymowOAuthStartView(HomeAssistantView):
-    """Redirect a validated helper request to the Cognito Hosted UI."""
+    """Show OAuth instructions and advance the Home Assistant flow."""
 
     url = "/api/lymow/oauth/start"
     name = "api:lymow:oauth:start"
-    requires_auth = True
+    requires_auth = False
 
     async def get(self, request: web.Request) -> web.StreamResponse:
         region = request.query.get("region", "")
         state = request.query.get("state", "")
         code_challenge = request.query.get("code_challenge", "")
+        flow_id = request.query.get("flow_id", "")
         if (
             region not in COGNITO_DOMAINS
             or not _is_urlsafe_token(state, 32, 128)
             or not _is_urlsafe_token(code_challenge, 43, 128)
+            or not _is_urlsafe_token(flow_id, 16, 128)
         ):
             raise web.HTTPBadRequest(text="Invalid OAuth start request")
 
         hass = request.app["hass"]
         auth = LymowAuth(async_get_clientsession(hass))
-        location = auth.get_oauth_authorize_url(
+        authorize_url = auth.get_oauth_authorize_url(
             region=region,
             redirect_uri=OAUTH_REDIRECT_URI,
             state=state,
             code_challenge=code_challenge,
         )
-        raise web.HTTPFound(location=location)
+        await hass.config_entries.flow.async_configure(flow_id, {})
+        safe_authorize_url = html.escape(authorize_url, quote=True)
+        page = f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Connect Lymow with Google</title>
+  <style>
+    body {{ background:#111; color:#eee; font:16px system-ui,sans-serif; margin:0; }}
+    main {{ max-width:680px; margin:48px auto; padding:32px; }}
+    h1 {{ margin-top:0; }}
+    li {{ margin:14px 0; line-height:1.5; }}
+    a {{ display:inline-block; background:#03a9d9; color:#fff; font-weight:700;
+         padding:14px 20px; border-radius:8px; text-decoration:none; }}
+    code {{ overflow-wrap:anywhere; }}
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Connect Lymow with Google</h1>
+    <ol>
+      <li>Open Google sign-in using the button below and finish signing in.</li>
+      <li>Your browser may report that it cannot open <code>myapp://callback/</code>.
+          This is expected. Copy the complete callback address from the browser.</li>
+      <li>Return to Home Assistant, paste the complete address into the authorization
+          field, and submit it promptly.</li>
+    </ol>
+    <p><a href="{safe_authorize_url}" target="_blank" rel="noopener noreferrer">Open Google sign-in</a></p>
+    <p>Keep this page open until you have copied the callback address.</p>
+  </main>
+</body>
+</html>"""
+        return web.Response(
+            text=page,
+            content_type="text/html",
+            headers={
+                "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
 
 
 class LymowOptionsFlow(OptionsFlow):
